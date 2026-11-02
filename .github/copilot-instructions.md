@@ -1,242 +1,38 @@
 # Copilot Instructions for Open Lap
 
-## Project Overview
+Project conventions (stack, commands, code style, architecture constraints, boundaries
+and git workflow) live in [`AGENTS.md`](../AGENTS.md). This file adds only the code
+review process.
 
+## Code Review
 
+- Reviews **amend `.github/copilot-review.md` in place** (header: date, commit, build
+  status, tests, one *Verified* paragraph); never new files, dated sections or a
+  per-commit change summary (git history is the record).
+- Findings are tables ordered High, Medium, Low, Info with columns
+  `# | Priority | Location | Finding`; renumber after changes; cross-reference as
+  "Code #3". **Resolved issues are removed**, never marked resolved.
+- Keep it brief: one or two sentences per row, numbers only where they decide
+  something, current snapshot only (no comparisons with earlier releases). Record
+  settled matters under *Maintainer Decisions*. A review changes nothing; fix only
+  when asked.
+- Do not flag the conventions in `AGENTS.md` (loose equality, legacy template syntax,
+  NgModules, split `rxjs` imports, missing tests, `strictNullChecks: false`
+  consequences unless they cause a bug). Do flag protocol or framing errors,
+  reconnect semantics, RxJS side effects, subscription leaks, unguarded
+  `backendFilter`, translation key drift, and unrelated reformatting or version
+  bumps in a change.
 
-Open Lap is a slot car race management app for Carrera® DIGITAL 124/132 systems. To use Open Lap, compatible hardware such as the [Carrera Bluetooth Connect](https://carrera-toys.com/en-at/products/20030369-carrera-bluetooth-connect) is required to connect to the track's Control Unit.
+## Maintainer Decisions (do not re-raise)
 
-The app is built with [Ionic 8](https://ionicframework.com/), [Angular 20](https://angular.io/), and [Apache Cordova](https://cordova.apache.org/) for native mobile builds. It also runs as a Progressive Web App.
-
-
-### Related Software
-
-Open Lap is an alternative to other slot car management apps:
-- [Carrera RaceApp](https://carrera-toys.com/en-at/pages/landing-page-race-app): Official app, no longer maintained, limited features.
-- [SmartRace](https://www.smartrace.de/en/): Commercial app with more features, but not free.
-
-Open Lap aims to provide a free, open-source solution for race management, focusing on usability and extensibility.
-
-## Architecture
-
-- **NgModule-based** architecture throughout — no standalone components.
-  All components set `standalone: false` explicitly.
-- Feature modules: `BackendModule`, `DriversModule`, `MenuModule`, `RmsModule`,
-  `SharedModule`, `TuningModule`, with `SettingsModule` lazy-loaded.
-- Sub-feature modules exist within features (e.g., `LeaderboardModule`,
-  `RaceControlModule` inside `rms/`) — imported by their parent module.
-- Every feature directory has an `index.ts` barrel file; use short barrel imports
-  (e.g., `'../services'`, `'../carrera'`).
-- No state management library — settings are managed via `SettingsService`
-  (wrapping `@ionic/storage-angular`) with an `AppSettings` typed facade using
-  Observables.
-
-### Backend Pattern
-
-- Abstract `Backend` class with `abstract scan(): Observable<Peripheral>`.
-- Concrete implementations are `@Injectable()` without `providedIn` and
-  registered via multi-provider DI in `BackendModule`:
-  `{ provide: Backend, useClass: SomeBackend, multi: true }`.
-- Injected as an array: `@Inject(Backend) private backends: Backend[]`.
-
-### Domain Model (`src/app/carrera/`)
-
-- Pure TypeScript classes/interfaces with no Angular decorators.
-- Heavy RxJS usage (`BehaviorSubject`, `Observable`, `Subject`, `Connectable`).
-- `ControlUnit` is a plain class (not injectable), instantiated directly.
-- `ControlUnit` uses the `connectable()` creation function (not the deprecated
-  `publish()` operator) plus the `retry({ delay, resetOnSuccess })` operator
-  (not the deprecated `retryWhen()`) to drive its own reconnect/backoff logic;
-  the `delay` callback logs the error, flips `state` to `'disconnected'`/`'connecting'`,
-  and returns a `timer()` notifier for exponential backoff.
-- Custom `DataView` class shadows the native browser `DataView` — be careful
-  with imports.
-- `Session` class in `rms/` is also a non-injectable domain class.
-
-### RxJS Conventions & Gotchas
-
-- `connectable()` (used by `ControlUnit.data`) must always pass
-  `resetOnDisconnect: false`. The default (`true`) creates a brand-new
-  internal multicast subject on every `disconnect()`/`reconnect()`, which
-  permanently breaks long-lived `shareReplay({ refCount: false })` consumers
-  (e.g. `status`, `getFuel`/`getStart`/`getMode`/`getPit`) since they stay
-  subscribed to the old, dead subject.
-- `Peripheral.connect()` (`ble.ts`, `web-bluetooth.ts`) returns a Subject built
-  via `createSubject()` (`carrera/peripheral.ts`) whose `_subscribe` is
-  overridden to resubscribe a **cold** observable that performs the actual
-  BLE/serial connect. This means every `retry()` resubscription of
-  `ControlUnit.connection` genuinely re-establishes the physical connection —
-  intentional, not a bug, if you see it while touching reconnect logic.
-- `Connection.backendFilter` (`app-settings.ts`) is optional/`undefined` by
-  design (the "auto" backend-detection case). Always guard with `?.` (or an
-  `if (backendFilter)` check) before calling string methods like `.includes()`
-  on it — calling it unguarded throws inside `map()` and permanently errors
-  the observable. See `connections.component.ts` (`if (this.backendFilter)`)
-  and `rms.page.ts` (`!!connection.backendFilter?.includes(...)`) for the
-  two verified guard patterns used in this codebase.
-- Prefer combining all `rxjs` (and separately all `rxjs/operators`) named
-  imports into a single import statement per module rather than splitting them
-  across multiple `import … from 'rxjs'` lines.
-
-## Code Style
-
-- **Single quotes** for all strings and imports.
-- **Semicolons** always.
-- **2-space indentation**.
-- No linter or formatter configured — style is convention-based.
-- TypeScript strict mode with `strictNullChecks: false` and `noImplicitAny: false`.
-- `useDefineForClassFields: false` in tsconfig.
-- Loose equality (`==`/`!=`) is used consistently project-wide instead of
-  strict equality (`===`/`!==`) — this is an established codebase convention,
-  not a defect; don't "fix" it file-by-file.
-- Templates in separate HTML files (`templateUrl`), styles in separate SCSS files
-  (`styleUrls`). Some pages omit `styleUrls` when no styling is needed.
-- Use legacy Angular template syntax (`*ngIf`, `*ngFor`, `[ngSwitch]`) — not
-  the newer `@if`/`@for` control flow.
-
-## Naming Conventions
-
-| Item             | Pattern                    | Example                     |
-| ---------------- | -------------------------- | --------------------------- |
-| Components       | `kebab-case.component.ts`  | `checkerboard.component.ts` |
-| Pages            | `kebab-case.page.ts`       | `rms.page.ts`               |
-| Services         | `kebab-case.service.ts`    | `settings.service.ts`       |
-| Modules          | `kebab-case.module.ts`     | `rms.module.ts`             |
-| Pipes            | `kebab-case.pipe.ts`       | `time.pipe.ts`              |
-| Directives       | `kebab-case.directive.ts`  | `target.directive.ts`       |
-| Popover menus    | `kebab-case.menu.ts`       | `rms.menu.ts`               |
-| Domain models    | `kebab-case.ts` (no suffix)| `control-unit.ts`           |
-
-## Components vs Pages
-
-- **Pages** are routed to and have no `selector` property.
-- **Components** used in templates have a `selector` (typically unprefixed
-  lowercase, e.g., `checkerboard`, `gauge`, `connections`).
-- **Popover menus** (`*.menu.ts`) receive data via `@Input()` properties
-  (passed as `componentProps`) and use `PopoverController` to dismiss.
-- **Modal dialogs** use `ModalController`, receive data via `@Input()`
-  properties (passed as `componentProps`), and dismiss with data.
-
-## Services
-
-- Most services use `@Injectable({ providedIn: 'root' })`.
-- `ControlUnitService` **extends `BehaviorSubject<ControlUnit>`** — components
-  pipe from it directly as an Observable source.
-- Cordova plugin wrappers are provided in the root module's `providers` array.
-- Settings subscription pattern: subscribe in `ngOnInit`, store as
-  `private subscription: Subscription`, unsubscribe in `ngOnDestroy`.
-  Some components use `firstValueFrom()` instead.
-- Pipes carry both `@Pipe()` and `@Injectable()` decorators.
-
-## Internationalization
-
-- Uses **@ngx-translate** (v17 functional providers: `provideTranslateService()`,
-  `provideTranslateHttpLoader()`).
-- Translation JSON files in `src/assets/i18n/`.
-- Translation keys are **natural English strings** (e.g., `"Connected to {{device}}"`),
-  not dot-namespaced identifiers.
-- Interpolation: `{{param}}` syntax.
-- Templates use both the `translate` attribute directive (`<span translate>Text</span>`)
-  and the `| translate` pipe (`{{'Label' | translate}}`).
-- Supported languages: de, en, es, fr, hu, it, pl, pt, sk.
-- `TranslateModule` is re-exported from `SharedModule`.
-
-### Translation Guidelines
-
-- **Preserve placeholders:** Keep interpolation tokens exactly as-is (for example, `{{device}}`, `{{count}}`, `{{total}}`).
-- **Do not translate product names:** Leave product-specific names untranslated. Always keep the English product names exactly as used in the UI: `Control Unit`, `Autonomous Car`, `Pace Car`, `Demo Control Unit`. Preserve brand tokens and symbols where present (for example, `Carrera® Control Unit`) and avoid creating local-language variants (e.g., do not use "unidad de control", "Unidade de Controle", or similar).
-- **Use natural, grammatical phrasing:** Translations should read naturally in the target language (avoid literal word-by-word translations). For time/remaining phrases prefer constructions like "Il reste X" in French rather than literal translations.
-- **French-specific notes:** Use `fr-FR` as the locale, prefer "Aucun" for the English "None" value, and check wording for notifications (e.g., "Il reste une minute !", "Il reste cinq tours !").
-- **Punctuation & spacing:** Follow typographic conventions where practical (e.g., space before `?`/`!` in French is acceptable), but preserving readability in the app is more important than strict non-breaking spaces.
-- **Capitalization:** Match the UI casing expectations (start-of-sentence capitalization for messages; preserve capitalized tokens).
-- **Key parity:** All locale files under `src/assets/i18n/` (`de`, `en`, `es`, `fr`, `hu`, `it`, `pl`, `pt`, `sk`) must keep the exact same key set as `en.json` — verify this when adding/removing a translation key.
-
-
-## Routing
-
-- Hash-based routing (`useHash: true`) with `PreloadAllModules` strategy.
-- Only `SettingsModule` is lazy-loaded; all other pages are eagerly loaded.
-- `SettingsModule` defines child routes inline (no separate routing module).
-- Default route redirects to `rms/practice`.
-
-## Styling
-
-- Dark mode is the default (and only) theme, set directly via CSS variables.
-- SCSS is minimal — uses `:host` selector and Ionic CSS custom properties.
-- Sizing uses relative units (`em`, `vw`).
-
-## Important Patterns
-
-- `ChangeDetectionStrategy.OnPush` is used on leaf/presentational components
-  (`Checkerboard`, `Gauge`, `RaceControl`, `Leaderboard`), never on pages.
-- `FormsModule` (template-driven) is used in most modules;
-  `ReactiveFormsModule` is used only in `RmsModule` for `RaceSettingsComponent`.
-- Custom `LoggingErrorHandler` routes errors through `LoggingService`.
-- Service Worker is conditionally enabled (production + non-Cordova only).
-- Avoid creating test files — the project has no existing test suite.
-- `ControlUnit` (`carrera/control-unit.ts`) is a plain non-injectable class, so
-  it cannot use `LoggingService`. Its `retry({ delay })` reconnect handler
-  intentionally ignores the error (parameter named `_error`) rather than
-  logging it — reconnect/backoff state (`disconnected`/`connecting`) is still
-  surfaced via `this.state`, so callers observe the failure without needing
-  the error detail logged.
-
-## Firmware Update
-
-Firmware update is implemented in `FirmwarePage`
-(`src/app/settings/firmware.page.ts`), **not** on the `ControlUnit` class. The page
-bypasses the normal `ControlUnit` polling protocol and talks to the `Peripheral`
-connection directly, since firmware update uses a different command set than
-normal race operation.
-
-### Peripheral.fwuBlockSize
-
-- `Peripheral` (`src/app/carrera/peripheral.ts`) has an optional `fwuBlockSize?: number`.
-- BLE-based backends (`BLEPeripheral`, Web Bluetooth) set it to `18` (BLE MTU
-  constraint), requiring chunked transfer.
-- Backends without an MTU constraint (e.g. serial) can leave it `undefined`,
-  which selects the simple (unchunked) transfer mode.
-
-### Flow (`FirmwarePage`)
-
-1. `readFirmwareFile()` loads a `.hmf` file (one hex-encoded data record per line)
-   via `parseFirmwareFile()`; non-`.hmf` files are treated as a single hex data line.
-2. `confirmFirmwareUpdate()` shows an `I18nAlertService` confirmation dialog before
-   calling `startFirmwareUpdate()`.
-3. `startFirmwareUpdate()`:
-   - Sets `status` to `'waiting'`.
-   - Disconnects the current `ControlUnit` (`cu.disconnect()`), waits ~5s, then opens
-     a **new low-level connection** directly via `cu.peripheral.connect()`.
-   - On connect, sends the start command `GB2` (`FWU_START_COMMAND`) and sets
-     `status` to `'updating'`.
-   - Every response is decoded as text and passed to `update()` via a direct
-     `.subscribe()` on the response pipeline, which drives the rest of the update
-     as a simple state machine.
-4. `update(value, blockSize)`:
-   - If the response starts with `0` (version response), logs the new version and
-     calls `cu.value.reconnect()` to resume normal `ControlUnit` polling, then returns.
-   - If the response starts with `G`, the CU is still busy (e.g. erasing) — wait 2s.
-   - If there's a queued low-level request (`this.requests`), send it next.
-   - Else if firmware lines remain: with no `blockSize`, send the whole line via
-     `DataView.fromHex('E', data)`; with a `blockSize`, split the line into
-     `blockSize`-byte chunks queued as `F` blocks (`DataView.fromHex('F', block)`),
-     followed by a final `E0` (`FWU_FINALIZE_COMMAND`).
-   - Else (nothing left to send), request the new firmware version via
-     `VERSION_COMMAND` (`0`) and set `status` to `'done'`.
-
-### Command framing (`DataView.fromHex`, `src/app/carrera/data-view.ts`)
-
-- `DataView.fromHex(cmd, s)` builds an ASCII command frame from a hex string `s`.
-- For `cmd === 'F'` (chunked block), byte 1 holds the block length instead of a CRC;
-  no CRC suffix is appended.
-- For other commands (e.g. `E`), the low nibble (0x0F) of the summed hex digit values
-  is appended as an ASCII CRC byte at the end.
-- `DataView.from(cmd, ...values)` (used elsewhere for non-firmware commands) uses a
-  similar CRC scheme based on the sum of the command char code and values.
-
-### Known gaps / TODOs
-
-- `firmware.page.ts` has a `TODO` about retrieving the new firmware version via
-  `peripheral` or `cu` instead of a raw `0` (`VERSION_COMMAND`) request.
-- File parsing uses a `TODO: use better file check indicator` heuristic based on the
-  `.hmf` extension.
+- Loose equality and legacy template syntax stay; they are conventions, not defects.
+- No automated tests or lint; hardware behaviour is verified manually on a CU.
+- `ControlUnit.data` keeps `resetOnDisconnect: false`; `status` and `getState()` keep
+  `shareReplay({ bufferSize: 1, refCount: false })` so late subscribers get the last
+  value.
+- The reconnect `delay` callback deliberately does not log the error; state
+  transitions are the signal.
+- `Session.createGrid()` keeps an unbounded `shareReplay({ refCount: true })` so late
+  subscribers replay lap history.
+- `this.finish(id)` stays inside `Session`'s `scan()` until it can be moved and tested
+  on hardware in one go.

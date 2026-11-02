@@ -1,108 +1,70 @@
-# Code Review — Open Lap
+# Code Review — Open Lap 2.7.2
 
-## Overall Quality: B+
+**Date:** 2026-11-02
+**Reviewed:** `master` at `be68439` ("Switch interval to monthly.", `config.xml`
+version 2.7.2, changelog dated 2026-08-07).
 
-The codebase is well-structured for a mid-size Angular/Ionic app. Domain modeling (the `carrera/` layer) is clean and decoupled from Angular. Feature modules are logically organized, naming conventions are consistent, and barrel exports keep imports tidy. The RxJS-heavy reactive style in `Session` and `RmsPage` is idiomatic and handles complex real-time race logic effectively.
+**Build status:** `npm run build` passes locally on Node 22.22.0 / Angular 20.3
+(one CommonJS warning for `localforage` via `@ionic/storage`). GitHub Actions not
+checked.
 
-The `shareReplay()` buffer is now explicit (`bufferSize: 1`) and `refCount: false` is an intentional, documented design choice. The remaining weaknesses center on deprecated RxJS operators and a `scan()` side effect. All known issues are documented with FIXME/TODO comments in the source.
+**Tests:** none; the project has no test suite or linter by design
+(*Maintainer Decisions*).
 
-**Strengths:**
-- Clean separation between hardware abstraction (`ControlUnit`), session logic, and UI
-- Consistent use of `OnDestroy` cleanup across most components
-- Good i18n coverage with natural-language translation keys
-- Defensive loaded-flag pattern in settings pages prevents data corruption
-- `NavParams` fully removed — popover menus and modal dialogs use `@Input()` with `componentProps`
+**Verified:** translation key parity of all nine locale files against `en.json`
+(116 keys each); the reconnect path (`connectable` / `retry`) and the firmware
+update state machine by reading `control-unit.ts`, `ble.ts`, `web-bluetooth.ts`,
+`web-serial.ts` and `firmware.page.ts`; every finding below against the source.
+Nothing was run on hardware.
 
-**Weaknesses:**
-- Deprecated RxJS operators in the most critical file (`control-unit.ts`)
-- `scan()` side effect in session logic (timing-critical, requires careful testing)
+## Code — Potential Issues
 
----
+| # | Priority | Location | Finding |
+|---|----------|----------|---------|
+| 1 | High | `app.component.ts` constructor | `window.screen.orientation.addEventListener(…)` runs before the `window.screen.orientation && …` guard that follows it. On WebKit before 16.4 (`deployment-target` is 13.0) `screen.orientation` is undefined, the root constructor throws and the app never bootstraps. Move the guard in front. |
+| 2 | Medium | `ble.ts` `createObservable()` error branch | A disconnect delivered by the plugin as a non-`Error` object while `isConnected` is true calls `subscriber.complete()`. `retry()` only resubscribes on errors, so `ControlUnit.data` completes: `state` never becomes `'disconnected'`, polling stops, and the `connectable` subject (`resetOnDisconnect: false`) is dead for later `connect()`/`reconnect()`. Usually masked by the request timeout erroring first; verify on hardware (switch phone Bluetooth off mid-race) and consider `subscriber.error(…)`. |
+| 3 | Medium | `settings.service.ts` `observe()` | A failed `storage.get()` puts the cached `ReplaySubject` into the error state and leaves it in `subjects`, so `observe(key)` (and `getOptions()`, `getConnection()`, …) stays errored for the app lifetime and `set()` becomes a no-op. A rejected `storage.create()` is not handled at all. |
+| 4 | Medium | `session.ts` `toggleYellowFlag()` / `finish()` | Clearing the yellow flag restores `realMask`, captured before any `finish()` that ran during the flag (time limit, `stop()`), so `cu.setMask()` re-enables lap counting for finished cars and the per-car `scan()` keeps accumulating laps. Merge the finish bits into `realMask` in `finish()`. |
+| 5 | Medium | `firmware.page.ts` `startFirmwareUpdate()` / `update()` | The raw connection is subscribed without an error handler and no timeout between responses. If the link drops or the CU stops answering, `status` stays `'updating'`/`'finishing'`, `busy` stays true and `firmwareCanDeactivateGuard` traps the user on the page. Add an error path that logs, resets `status` to `'init'`, unsubscribes and reconnects, plus a response timeout. |
+| 6 | Low | `session.ts` timer `tap()` | After the countdown reaches 0 every 500 ms tick satisfies `time == 0`, so `finish()` and `finished.next(true)` run on each tick for the rest of the session; hidden by `distinctUntilChanged` downstream. Guard with `!this.finished.value`. |
+| 7 | Low | `rms.page.ts` constructor (`pitlane`, `start`) | `mergeMap(cu => cu.getMode()/getStart())` keeps the inner subscription of every superseded `ControlUnit` alive (its `status` never completes), leaking one per device swap and interleaving stale values. `TuningPage` uses `switchMap`, which is correct here. |
+| 8 | Low | `rms.page.ts` `ngOnInit()` / `startSession()` | When `cu` becomes `null` the page nulls `session` but leaves `sessionSubscription` running; the nested `firstValueFrom()` chains have no `.catch` and may call `toggleStart()`/`session.start()` on a session that `restartSession()` already replaced. |
+| 9 | Low | `control-unit.ts` `disconnect()`, `getVersion()`; `menu.component.ts` `getVersion()` | `disconnect()` unsubscribes but never pushes `'disconnected'`, so `getState()` keeps reporting `'connected'`. `getVersion()` caches a `firstValueFrom` promise that rejects with `EmptyError` if `data` completes (Code #2); the menu feeds it to `version \| async` uncaught. |
+| 10 | Low | `menu.component.ts` `onMenuOpen()` | The user-gesture workaround cannot run on the first open (`<connections>` is under `*ngIf="open"` and `open` is set last), so it runs on the second open and calls `ngOnInit()` on an already initialized component, adding a second `getConnection()` subscription (released on destroy). |
+| 11 | Low | `web-serial.ts` `poll()` | `value.buffer` ignores the chunk's `byteOffset`/`byteLength`; use `value` directly. Works today only because Chrome hands out chunks that own their buffer. |
+| 12 | Low | `app.module.ts` `provideTranslateService()` | `lang: "de"` is hard-coded, so `de.json` is fetched on every start and templates render in German until `AppComponent.setLanguage()` switches. Use `'en'` or omit. |
+| 13 | Low | `demo.ts` `DemoBackend.scan()` | Every `scan()` builds a new `DemoPeripheral` whose constructor starts eight `Car` timer loops that are never stopped and push into `laps` unbounded; each menu open or `AppComponent.connect()` adds another set. Demo mode only. |
+| 14 | Low | `session.ts` `ranking`; `rms.page.ts` `startSession()` | `ranking` is not shared and `RmsPage` subscribes it four times, so each `reset` emission queues `cu.setMask()` four times (each displacing a poll cycle) and the `scan` state is kept four times over. `shareReplay({ bufferSize: 1, refCount: true })` on `ranking` fixes both. |
+| 15 | Low | `firmware.page.ts` | `private requests = []` is `any[]` (type it `DataView[]`); `confirmFirmwareUpdate()` is `async` without awaiting `alert.show()`; `ngOnInit()` is an empty placeholder. |
+| 16 | Info | `data-view.ts` `from()`; `control-unit.ts` `setLap()` | `0x30 \| value` assumes nibble values; `setLapHi(value >> 4)` passes 16+ for laps ≥ 256, which folds to `'0'`, so the CU lap display wraps at 255. Worth clamping or documenting. |
+| 17 | Info | `app.component.ts` `connect()` | When the 3 s scan for a newly selected device times out, the previous `ControlUnit` stays active, and overlapping `getConnection()` emissions overwrite `stateSubscription` without unsubscribing. Small, accepted. |
+| 18 | Info | `session.ts` `createGrid()` `scan()` | `this.finish(id)` inside the accumulator is a side effect in timing-critical code; the `finished` tuple flag would allow a downstream `tap()` on the `false → true` edge. Stays until it can be moved and tested on hardware (*Maintainer Decisions*). |
+| 19 | Info | `control-unit.ts` `data` / `status` / `getState()` | `resetOnDisconnect: false` and `shareReplay({ refCount: false })` are deliberate so late subscribers keep working across reconnects (*Maintainer Decisions*). |
 
-## HIGH — Bugs / Correctness
+No other implementation issues found; `backendFilter` is guarded at every consumer
+(`rms.page.ts`, `connections.component.ts`, `connection.page.ts`), and component
+subscriptions under `settings/`, `drivers/`, `tuning/` and `menu/` are stored and
+released in `ngOnDestroy`.
 
-### 1. Deprecated RxJS operators: `publish()` and `retryWhen()`
+## Build & CI
 
-**File:** `src/app/carrera/control-unit.ts` L70, L80
+| # | Priority | Location | Finding |
+|---|----------|----------|---------|
+| 1 | Low | `.github/workflows/ci.yml` | `actions/checkout@v3`, `actions/setup-node@v3` and `actions/setup-java@v2` run on deprecated Node 16 runtimes; bump to v4/v5. |
+| 2 | Low | `.github/dependabot.yml` | `target-branch: "develop"` names a branch that does not exist on the remote, so action updates are never opened. |
+| 3 | Info | `angular.json` | Declares `test` (karma) and `lint` (angular-eslint) targets whose dependencies are not installed; harmless, but misleading. |
 
-Both deprecated since RxJS 7.x (removal planned for v8). Source FIXME comments note that `catchError` doesn't work correctly with `publish`/`shareReplay`, and `shareReplay` with `refCount: false` doesn't work with `retryWhen`. These are coupled — migrating requires replacing both simultaneously.
+## Translations (`src/assets/i18n/`)
 
-**Suggested fix:**
+No issues found. All nine files share the same 116 keys; placeholders and product
+names are preserved.
 
-`publish()` returns a `ConnectableObservable`; the modern equivalent is the standalone `connectable()` factory, which already imported `Connectable` is typed against:
+## Docs (`README.md`)
 
-```ts
-import { connectable, Subject } from 'rxjs';
+No issues found. Build instructions, supported firmware versions and store links
+are current.
 
-this.data = connectable(
-  timedConnection.pipe(
-    retry({ delay: errors => this.doReconnect(errors) }),
-    tap(() => this.poll()),
-    map((data: ArrayBuffer) => new DataView(data))
-  ),
-  { connector: () => new Subject<DataView>(), resetOnDisconnect: false }
-);
-```
+## `CHANGELOG.md`
 
-`retryWhen(fn)` maps directly to `retry({ delay: fn })` — `delay` receives the same error notification stream and re-subscribes when it emits. Because `doReconnect()` already owns its own retry/backoff counter via `scan()` (resetting to `0` whenever `state.value === 'connected'`), no per-error count argument is needed and the existing logic transfers unchanged.
-
-**Caveats to verify when migrating:**
-- `connectable()` defaults `resetOnDisconnect: true`; set it to `false` to preserve the current `publish()` semantics where the underlying connection persists across re-subscription.
-- `retry` with a `delay` selector completes (rather than retries) if the selector completes. `doReconnect()` returns a `timer(...)` that emits then completes per error, which is the desired "wait then retry once more" behavior — confirm reconnection still loops indefinitely after multiple consecutive failures.
-- Test the full reconnect path on real hardware (drop and restore the BLE link): connect → timeout → backoff → `state` transitions `disconnected → connecting → connected`.
-
-### 2. Stateful side effect in `doReconnect()` reads `state.value`
-
-**File:** `src/app/carrera/control-unit.ts` L228–242
-
-`doReconnect()` reads `this.state.value` imperatively inside `scan()` and pushes new states via `state.next()`. This works but couples the retry counter to a mutable `BehaviorSubject` snapshot. It is low-risk and intentional, but worth a comment noting that the `scan()` accumulator deliberately resets on a successful connection. No change required.
-
----
-
-## MEDIUM — Robustness
-
-### 3. `scan()` side effect calls `this.finish(id)`
-
-**File:** `src/app/rms/session.ts` L236–240
-
-The `scan()` accumulator invokes `this.finish(id)`, which mutates `this.mask` and sends commands to the CU. Side effects inside `scan()` are an anti-pattern (they should live in a downstream `tap()`), but the timing of this call is critical to race session state management.
-
-**Suggested fix:** keep `scan()` pure by emitting the `finished` flag (it already does) and reacting to the *transition* downstream. The accumulator already carries `finished` as the 4th tuple element, so a `tap()` after the `scan()` can detect the `false → true` edge and trigger the side effect exactly once:
-
-```ts
-const times = group.pipe(
-  scan(([times, last, best, finished]: TimeInfo, [id, time, sensor]) => {
-    // ...existing pure accumulation, but DON'T call this.finish() here...
-    if (sensor === 1 && !finished && this.isFinished(times.length - 1)) {
-      finished = true; // just flip the flag
-    }
-    return <TimeInfo>[times, last, best, finished];
-  }, <TimeInfo>[[], [], [], false]),
-  distinctUntilChanged((a, b) => a[3] === b[3]),   // optional: only re-emit on change
-  tap(([, , , finished]) => {
-    if (finished) {
-      this.finish(group.key);   // side effect isolated downstream
-    }
-  })
-);
-```
-
-**Caveats to verify when migrating:**
-- `this.finish()` must fire **once**. Guard against repeated emissions after `finished` becomes `true` (e.g. `pairwise()` to detect the `false → true` edge, or a local `wasFinished` flag in the `tap`), otherwise `setMask`/`finish` commands are resent on every subsequent lap event.
-- `group.key` is the driver id; confirm it equals the `id` previously passed to `finish(id)` (it does — `group` is keyed by `([id]) => id`).
-- This is timing-critical race logic. Test with a multi-car session running to the configured lap/time limit and confirm the checkered flag and pace-car behavior are unchanged.
-
----
-
-## Summary
-
-| Severity | Count | Key themes |
-|----------|-------|------------|
-| HIGH     | 2     | Deprecated `publish()`/`retryWhen()`; stateful `doReconnect()` counter |
-| MEDIUM   | 1     | `scan()` side effect (timing-critical) |
-
-### Recommended order of work
-
-1. **Migrate `publish()` + `retryWhen()` together** (#1) — they are coupled and block a future RxJS 8 upgrade. Validate reconnection on hardware.
-2. **Isolate the `scan()` side effect** (#3) — purely mechanical once the `false → true` edge guard is in place; lowest risk after reconnection is verified.
-3. Leave #2 as a documented intentional decision; revisit only if the `ControlUnit` lifecycle model changes.
+No issues found. The 2.7.2 section (2026-08-07) matches `config.xml` and the
+format is consistent (imperative one-liners, two blank lines between releases).
