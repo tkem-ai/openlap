@@ -1,226 +1,167 @@
 # AGENTS.md — Open Lap
 
-Guidance for AI coding agents (GitHub Copilot, Claude Code, Codex, …) working in
-this repository. Humans are welcome too. Keep this file accurate: when you change
-a convention described here, update it in the same change.
-
-## Project overview
-
-Open Lap is a slot car race management app for Carrera® DIGITAL 124/132 systems.
+**Open Lap** is a slot car race management app for Carrera® DIGITAL 124/132 systems.
 It talks to the track's Control Unit (CU) over Bluetooth LE (Carrera Bluetooth
-Connect / AppConnect), Web Bluetooth or Web Serial, and ships as a Progressive Web
-App, an Android app and an iOS app.
+Connect / AppConnect), Web Bluetooth or Web Serial, and ships as a PWA, an Android
+app and an iOS app. Angular 20 (NgModule-based), Ionic 8, Apache Cordova, RxJS 7,
+TypeScript 5.8. Single maintainer; `master` is the release branch and deploys the
+PWA to GitHub Pages. Guidance here applies to every coding agent (Copilot, Claude
+Code, Codex, …); keep it accurate when you change a convention.
 
-- Stack: Angular 20 (NgModule-based), Ionic 8, Apache Cordova, RxJS 7, TypeScript 5.8.
-- License: Apache-2.0. Carrera® is a trademark of Carrera Toys GmbH; Open Lap is not
-  affiliated with them.
-- User-facing documentation lives in `README.md`; release notes in `CHANGELOG.md`.
+## Ground Rules
 
-## Repository layout
-
-```
-src/app/
-  app.module.ts          root module, Cordova plugin providers, LoggingErrorHandler
-  app-routing.module.ts  hash routing; only SettingsModule is lazy-loaded
-  app-settings.ts        AppSettings facade + Connection/Options/RaceOptions/Driver types
-  backend/               Backend implementations: ble, web-bluetooth, web-serial, demo
-  carrera/               pure-TypeScript domain model (ControlUnit, DataView, Peripheral)
-  drivers/, tuning/      pages
-  menu/                  side menu (connect/reconnect, navigation)
-  rms/                   race management: RmsPage, Session, leaderboard/, race-control/
-  services/              injectable services (settings, control-unit, logging, speech, …)
-  settings/              lazy-loaded settings pages, incl. firmware.page.ts
-  shared/                SharedModule: pipes, directives, re-exports TranslateModule
-src/assets/i18n/         translations (de, en, es, fr, hu, it, pl, pt, sk)
-src/theme/               Ionic CSS variables (dark theme only)
-config.xml               Cordova config; holds the app version and android-versionCode
-.github/workflows/ci.yml builds android, ios and pwa; deploys the PWA from master
-```
-
-Every feature directory has an `index.ts` barrel. Import through the barrel
-(`'../services'`, `'../carrera'`) rather than deep paths.
-
-## Setup and commands
-
-```
-npm ci                     # install dependencies (Node >= 20.5)
-npm start                  # ng serve, dev server in the browser (use the "Demo" backend)
-npm run build              # ng build, production bundle to www/
-ionic build --prod -- --base-href=/openlap/ --service-worker   # what CI builds for the PWA
-ionic cordova build android --prod   # native builds (need Android SDK / Xcode)
-ionic cordova build ios --prod
-```
-
-`ionic serve` works too once the Ionic CLI is installed. Web Bluetooth and Web
-Serial need Chrome or Edge and a secure context; the Demo backend needs no hardware.
-
-## Verifying your work
-
-- There is **no test suite and no linter**. `angular.json` still declares `test`
+- **The only check is `npm run build`** (strict templates; template errors fail it).
+  There is no test suite, linter or formatter: `angular.json` still declares `test`
   and `lint` targets, but karma/eslint are not installed and there are no
-  `*.spec.ts` files, so `ng test` / `ng lint` do not run. Do not add test files or
-  linter config unless explicitly asked.
-- The minimum check before you finish is a clean `npm run build` (strict
-  templates are on, so template errors fail the build).
-- Hardware-related changes (`carrera/`, `backend/`, `rms/session.ts`, firmware
-  update) cannot be verified in CI. Say so in your summary and describe what to
-  test on a real Control Unit (connect → drop link → reconnect; a multi-car race
-  run to its lap/time limit; etc.).
-- When touching translations, check key parity (see Internationalization).
-
-## Code style
-
-- Single quotes, semicolons, 2-space indentation. No formatter is configured;
-  match the surrounding code.
-- TypeScript `strict: true` but `strictNullChecks: false` and `noImplicitAny: false`;
-  `useDefineForClassFields: false`. Keep it that way.
-- Loose equality (`==` / `!=`) is the established convention project-wide. It is
-  not a defect; do not "fix" it, and do not flag it in reviews.
-- Legacy Angular template syntax (`*ngIf`, `*ngFor`, `[ngSwitch]`), not `@if`/`@for`.
-- NgModules everywhere; every component/pipe/directive declares `standalone: false`.
-- Templates in `.html` files (`templateUrl`), styles in `.scss` (`styleUrls`, often omitted).
-- One `import { … } from 'rxjs'` and one `… from 'rxjs/operators'` per file; do
-  not split them into several lines.
-- Existing `TODO`/`FIXME` comments document known gaps. Leave them unless you fix
-  the underlying issue.
-
-### Naming
-
-| Item          | Pattern                     | Example                     |
-| ------------- | --------------------------- | --------------------------- |
-| Components    | `kebab-case.component.ts`   | `checkerboard.component.ts` |
-| Pages         | `kebab-case.page.ts`        | `rms.page.ts`               |
-| Services      | `kebab-case.service.ts`     | `settings.service.ts`       |
-| Modules       | `kebab-case.module.ts`      | `rms.module.ts`             |
-| Pipes         | `kebab-case.pipe.ts`        | `time.pipe.ts`              |
-| Directives    | `kebab-case.directive.ts`   | `target.directive.ts`       |
-| Popover menus | `kebab-case.menu.ts`        | `rms.menu.ts`               |
-| Domain models | `kebab-case.ts` (no suffix) | `control-unit.ts`           |
-
-- Pages are routed to and have no `selector`. Components have a short,
-  unprefixed selector (`checkerboard`, `gauge`, `connections`).
-- Popover menus and modal dialogs receive data via `@Input()` properties passed
-  as `componentProps` and dismiss through `PopoverController` / `ModalController`.
-- Pipes carry both `@Pipe()` and `@Injectable()`.
-
-## Architecture notes
-
-### Angular layer
-
-- Services are `@Injectable({ providedIn: 'root' })`. `ControlUnitService`
-  extends `BehaviorSubject<ControlUnit>`; components pipe from it directly.
-- Settings: no state library. `SettingsService` wraps `@ionic/storage-angular`;
-  `AppSettings` (`app-settings.ts`) exposes typed Observables. Subscribe in
-  `ngOnInit`, keep a `private subscription: Subscription`, unsubscribe in
-  `ngOnDestroy` (some components use `firstValueFrom()` instead).
-- `ChangeDetectionStrategy.OnPush` only on leaf/presentational components
-  (`Checkerboard`, `Gauge`, the `race-control/` and `leaderboard/` components),
-  never on pages.
-- Template-driven `FormsModule` almost everywhere; `ReactiveFormsModule` only
-  in `RmsModule` for `RaceSettingsComponent`.
-- Routing is hash-based with `PreloadAllModules`; default route is `rms/practice`;
-  `SettingsModule` defines its child routes inline.
-- Service worker is enabled only for production, non-Cordova builds.
-
-### Backends
-
-- Abstract `Backend` (`backend/backend.ts`) with `abstract scan(): Observable<Peripheral>`.
-- Implementations (`BLEBackend`, `WebBluetoothBackend`, `WebSerialBackend`,
-  `DemoBackend`) are `@Injectable()` without `providedIn` and registered as a
-  multi-provider in `BackendModule`; consumers inject `@Inject(Backend) backends: Backend[]`.
-- `Peripheral.connect()` returns a `Subject<ArrayBuffer>` built with
-  `createSubject()` (`carrera/peripheral.ts`): `next()` writes to the device and
-  subscribing re-runs a **cold** observable that performs the physical connect.
-  Every `retry()` resubscription therefore re-establishes the link. This is
-  intentional.
-- `Peripheral.fwuBlockSize` (optional) is the max firmware chunk size. BLE-based
-  peripherals and the demo set `18`; Web Serial leaves it `undefined`.
-
-### Domain model (`src/app/carrera/`)
-
-- Plain TypeScript, no Angular decorators. `ControlUnit` and `Session` (`rms/`)
-  are instantiated directly, never injected, so they cannot use `LoggingService`.
-- The local `DataView` class shadows the browser's `DataView`. Watch your imports.
-- `ControlUnit.data` is built with `connectable(…, { resetOnDisconnect: false })`.
-  Keep `resetOnDisconnect: false`: the default would create a fresh subject on
-  every reconnect and silently orphan the long-lived
-  `shareReplay({ refCount: false })` consumers (`status`, `getFuel`, `getStart`, …).
-- Reconnect/backoff uses `retry({ resetOnSuccess: true, delay })`. The `delay`
-  callback ignores the error (`_error`), flips `state` to `'disconnected'`, and
-  returns an exponential `timer()` that flips it to `'connecting'`. Failures are
-  observable through `getState()`, not through logs. Do not reintroduce the
-  deprecated `publish()` / `retryWhen()`.
-- `Connection.backendFilter` (`app-settings.ts`) is `undefined` for "auto"
-  detection. Guard it (`backendFilter?.includes(...)` or `if (backendFilter)`)
-  before calling string methods; an unguarded call inside `map()` errors the
-  observable permanently.
-- `Session` (`rms/session.ts`) drives lap/time logic with `groupBy` + `scan`. The
-  `this.finish(id)` call inside `scan()` is a known, timing-critical side effect
-  (see the TODO there); do not move it without testing on hardware.
-
-### Firmware update (`settings/firmware.page.ts`)
-
-Implemented in `FirmwarePage`, not in `ControlUnit`. It bypasses the normal
-polling protocol and talks to `cu.peripheral.connect()` directly.
-
-- Input: `.hmf` files, one `"<hex>"` line per record (~880 lines; files outside
-  800–1000 lines are rejected unless the demo backend is active). Other file
-  names are rejected.
-- Flow: `confirmFirmwareUpdate()` → `startFirmwareUpdate()` disconnects the
-  `ControlUnit`, waits 5 s, opens a raw connection, sends `GB2`
-  (`FWU_START_COMMAND`) and feeds every text-decoded response into `update()`.
-  Responses starting with `G` (CU busy, e.g. erasing) are delayed 2 s via `delayWhen`.
-- `update()` is a small state machine: drain queued `requests` first; otherwise
-  send the next line as a single `E` frame (no `fwuBlockSize`) or as `F` chunks
-  of `fwuBlockSize` bytes followed by `E0` (`FWU_FINALIZE_COMMAND`); when no
-  lines remain, set `status = 'finishing'`, wait 5 s and send `0`
-  (`VERSION_COMMAND`). A response starting with `0` carries the new version,
-  sets `status = 'done'` and reconnects via `AppComponent.menu.reconnect()`.
-- `status` is `'init' | 'starting' | 'updating' | 'finishing' | 'done'`;
-  `firmwareCanDeactivateGuard` blocks navigation while `busy`.
-- Framing (`DataView.fromHex(cmd, hex)`, `carrera/data-view.ts`): `F` frames put
-  the block length in byte 1 and carry no CRC; other frames append an ASCII CRC
-  byte (low nibble of the summed hex digit values). `DataView.from(cmd, …values)`
-  is the CRC scheme for ordinary CU commands.
-
-## Internationalization
-
-- `@ngx-translate/core` v17 with functional providers (`provideTranslateService()`,
-  `provideTranslateHttpLoader()`); `TranslateModule` is re-exported from `SharedModule`.
-- Keys are natural English strings (`"Connected to {{device}}"`), not dotted ids.
-  Templates use both `<span translate>Text</span>` and `{{ 'Text' | translate }}`.
-- All files in `src/assets/i18n/` must have exactly the same key set as `en.json`.
-  When adding or removing a key, update every locale. Quick check:
+  `*.spec.ts` files. Do not add tests, linters, formatters, state-management
+  libraries or standalone components.
+- **Do not edit `CHANGELOG.md` or bump the version** (`version` and
+  `android-versionCode` in `config.xml`); both are release-only. Entries are
+  `X.Y.Z YYYY-MM-DD` headings underlined with dashes, imperative one-line bullets
+  ending with a period, blank lines between bullets, two blank lines between releases.
+- **Hardware paths cannot be verified in CI** (`carrera/`, `backend/`,
+  `rms/session.ts`, firmware update). Say so in your summary and describe what to
+  test on a real CU (connect → drop link → reconnect; a multi-car race run to its
+  lap/time limit; a full firmware update).
+- Commit subjects are short imperative sentences ending with a period
+  (`Modernize reconnect handling.`), one logical change per commit. Dependabot
+  targets a `develop` branch; check which branches exist on the remote before
+  choosing a base.
+- Style: single quotes, semicolons, 2-space indentation; `strict: true` with
+  `strictNullChecks: false`, `noImplicitAny: false`, `useDefineForClassFields: false`.
+  Loose equality (`==`/`!=`) and legacy template syntax (`*ngIf`, `*ngFor`,
+  `[ngSwitch]`) are the convention; do not convert them, not even as drive-bys.
+  One `import … from 'rxjs'` and one `… from 'rxjs/operators'` per file. Existing
+  `TODO`/`FIXME` comments record known gaps; leave them unless you fix the gap.
+- Files: `kebab-case.component.ts` / `.page.ts` / `.service.ts` / `.module.ts` /
+  `.pipe.ts` / `.directive.ts` / `.menu.ts` (popovers); domain models have no suffix
+  (`control-unit.ts`). Templates in `.html` (`templateUrl`), styles in `.scss`
+  (`styleUrls`, often omitted). Every feature directory has an `index.ts` barrel;
+  import through it (`'../services'`, `'../carrera'`), not deep paths.
+- Pages are routed and have no `selector`; components have a short unprefixed one
+  (`checkerboard`, `gauge`). Popovers and modals receive data via `@Input()` passed
+  as `componentProps` and dismiss through `PopoverController`/`ModalController`.
+  Pipes carry both `@Pipe()` and `@Injectable()`.
+- Translations (`src/assets/i18n/`, de en es fr hu it pl pt sk) must keep exactly
+  the key set of `en.json`; keys are natural English strings with `{{placeholders}}`.
+  Never translate product names (`Control Unit`, `Autonomous Car`, `Pace Car`,
+  `Demo Control Unit`, `Carrera®`); prefer natural phrasing; match sentence-initial
+  capitalization. French: `fr-FR`, "Aucun" for "None", "Il reste une minute !"
+  (space before `!`/`?` is fine). Key-parity check:
 
   ```
   node -e 'const fs=require("fs"),d="src/assets/i18n/",en=Object.keys(JSON.parse(fs.readFileSync(d+"en.json")));for(const f of fs.readdirSync(d)){const k=Object.keys(JSON.parse(fs.readFileSync(d+f)));console.log(f,en.filter(x=>!k.includes(x)),k.filter(x=>!en.includes(x)))}'
   ```
 
-- Translation rules: keep `{{placeholders}}` verbatim; never translate product
-  names (`Control Unit`, `Autonomous Car`, `Pace Car`, `Demo Control Unit`,
-  `Carrera®`); prefer natural phrasing over word-by-word; match sentence-initial
-  capitalization. French: `fr-FR`, "Aucun" for "None", wording like
-  "Il reste une minute !" (space before `!`/`?` is fine).
+## Architecture
 
-## Git, releases and pull requests
+**Layout** (`src/app/`): `app.module.ts` (root module, Cordova plugin providers,
+`LoggingErrorHandler`, service worker only for production non-Cordova builds);
+`app-routing.module.ts` (hash routing, `PreloadAllModules`, default `rms/practice`,
+only `SettingsModule` lazy-loaded with inline child routes); `app-settings.ts`
+(`AppSettings` facade over `SettingsService`/`@ionic/storage-angular` plus
+`Connection`, `Options`, `RaceOptions`, `Driver` types); `backend/`, `carrera/`,
+`drivers/`, `menu/`, `rms/` (`RmsPage`, `Session`, `leaderboard/`, `race-control/`),
+`services/`, `settings/` (incl. `firmware.page.ts`), `shared/` (pipes, directives,
+re-exports `TranslateModule`); `src/theme/` (dark theme only).
 
-- Commit subjects are short imperative sentences ending with a period, e.g.
-  `Modernize reconnect handling.` One logical change per commit.
-- Pushes to `master` deploy the PWA to GitHub Pages via `ci.yml`. Dependabot is
-  configured to target a `develop` branch; check which branches exist on the
-  remote before choosing a base.
-- Releases: add an entry at the top of `CHANGELOG.md` in the existing
-  `X.Y.Z YYYY-MM-DD` format, and bump `version` and `android-versionCode` in
-  `config.xml`. Do not bump versions as part of an unrelated change.
-- In a PR description, state what was built and what still needs testing on
-  real hardware.
+**Angular layer**: services are `@Injectable({ providedIn: 'root' })`;
+`ControlUnitService` extends `BehaviorSubject<ControlUnit>` and components pipe
+from it directly. No state library: subscribe to `AppSettings` Observables in
+`ngOnInit`, keep a `private subscription: Subscription`, unsubscribe in
+`ngOnDestroy` (some components use `firstValueFrom()`). `OnPush` only on
+leaf/presentational components (`Checkerboard`, `Gauge`, `race-control/`,
+`leaderboard/`), never on pages. Template-driven `FormsModule` everywhere except
+`ReactiveFormsModule` for `RaceSettingsComponent`. i18n is `@ngx-translate` v17
+with functional providers; templates use `<span translate>` and `| translate`.
 
-## Things not to do
+**Backends** (`backend/`): abstract `Backend` with `abstract scan(): Observable<Peripheral>`;
+`BLEBackend`, `WebBluetoothBackend`, `WebSerialBackend`, `DemoBackend` are
+`@Injectable()` without `providedIn`, registered as a multi-provider in
+`BackendModule` and injected as `@Inject(Backend) backends: Backend[]`.
+`Peripheral.connect()` returns a `Subject<ArrayBuffer>` built with `createSubject()`
+(`carrera/peripheral.ts`): `next()` writes to the device, subscribing re-runs a
+**cold** observable that performs the physical connect, so every `retry()`
+resubscription re-establishes the link. Intentional. `Peripheral.fwuBlockSize` is
+the max firmware chunk size: BLE peripherals and the demo set `18`, Web Serial
+leaves it `undefined`.
 
-- Do not add tests, linters, formatters, state-management libraries, or
-  standalone components.
-- Do not convert `==` to `===`, legacy template syntax to control flow, or
-  `rxjs/operators` imports to `rxjs` imports as drive-by changes.
-- Do not change CU protocol constants, command framing or reconnect timings
-  without a hardware-backed reason.
-- Do not commit `platforms/`, `plugins/`, `www/` or `build.json` (see `.gitignore`).
+**Domain model** (`carrera/`, plus `Session` in `rms/`): plain TypeScript, no
+decorators, instantiated directly, so it cannot use `LoggingService`. The local
+`DataView` shadows the browser's; watch imports. `ControlUnit.data` is
+`connectable(…, { resetOnDisconnect: false })`; the default would create a fresh
+subject on every reconnect and orphan the long-lived
+`shareReplay({ refCount: false })` consumers (`status`, `getFuel`, `getStart`, …).
+Reconnect uses `retry({ resetOnSuccess: true, delay })`: the callback ignores the
+error (`_error`), sets `state` to `'disconnected'` and returns an exponential
+`timer()` that sets `'connecting'`; failures surface through `getState()`, not logs.
+Never reintroduce `publish()`/`retryWhen()`. `Connection.backendFilter` is
+`undefined` for "auto": guard it (`backendFilter?.includes(...)`) before string
+methods, or the observable errors permanently. `Session` drives lap/time logic with
+`groupBy` + `scan`; the `this.finish(id)` call inside `scan()` is a known,
+timing-critical side effect (TODO in source). Do not change CU protocol constants,
+command framing or reconnect timings without a hardware-backed reason.
+
+**Firmware update** (`settings/firmware.page.ts`, not `ControlUnit`): bypasses
+polling and talks to `cu.peripheral.connect()` directly. Input is a `.hmf` file of
+`"<hex>"` lines (~880; outside 800–1000 lines is rejected except with the demo
+backend); other names are rejected. `startFirmwareUpdate()` disconnects the CU,
+waits 5 s, opens a raw connection, sends `GB2` (`FWU_START_COMMAND`) and feeds each
+text-decoded response to `update()`; `G` responses (CU busy) are delayed 2 s via
+`delayWhen`. `update()` drains queued `requests`, else sends the next line as one
+`E` frame (no `fwuBlockSize`) or as `F` chunks of `fwuBlockSize` bytes plus `E0`
+(`FWU_FINALIZE_COMMAND`); with no lines left it sets `status = 'finishing'`, waits
+5 s and sends `0` (`VERSION_COMMAND`); a `0…` response carries the new version,
+sets `'done'` and reconnects via `AppComponent.menu.reconnect()`. `status` is
+`'init' | 'starting' | 'updating' | 'finishing' | 'done'`;
+`firmwareCanDeactivateGuard` blocks navigation while `busy`. Framing
+(`DataView.fromHex(cmd, hex)`): `F` frames carry the block length in byte 1 and no
+CRC; other frames append an ASCII CRC byte (low nibble of the summed hex digit
+values). `DataView.from(cmd, …values)` is the CRC scheme for ordinary CU commands.
+
+## Development and Build
+
+```bash
+npm ci                                  # Node >= 20.5
+npm start                               # ng serve; use the "Demo" backend without hardware
+npm run build                           # production bundle to www/; the required check
+ionic build --prod -- --base-href=/openlap/ --service-worker   # CI's PWA build
+ionic cordova build android --prod      # native builds need Android SDK / Xcode
+ionic cordova build ios --prod
+```
+
+Web Bluetooth and Web Serial need Chrome or Edge in a secure context. CI
+(`.github/workflows/ci.yml`) builds android, ios and pwa on every push and PR and
+deploys the PWA from `master`. Never commit `platforms/`, `plugins/`, `www/` or
+`build.json`.
+
+## Code Review
+
+- Reviews **amend `.github/copilot-review.md` in place** (header: date, commit,
+  build status, tests, one *Verified* paragraph); never new files, dated sections or
+  a per-commit change summary (git history is the record).
+- Findings are tables ordered High, Medium, Low, Info with columns
+  `# | Priority | Location | Finding`; renumber after changes; cross-reference as
+  "Code #3". **Resolved issues are removed**, never marked resolved.
+- Keep it brief: one or two sentences per row, numbers only where they decide
+  something. Keep accepted trade-offs as Info rows; record settled matters under
+  *Maintainer Decisions*. A review changes nothing; fix only when asked.
+- Do not flag the conventions under *Ground Rules* (loose equality, legacy template
+  syntax, NgModules, split `rxjs` imports, missing tests, `strictNullChecks: false`
+  consequences unless they cause a bug). Do flag protocol/framing errors, reconnect
+  semantics, RxJS side effects, subscription leaks, unguarded `backendFilter`,
+  translation key drift, and unrelated reformatting or version bumps in a change.
+
+## Maintainer Decisions (do not re-raise)
+
+- Loose equality and legacy template syntax stay; they are conventions, not defects.
+- No automated tests or lint; hardware behaviour is verified manually on a CU.
+- `ControlUnit.data` keeps `resetOnDisconnect: false`; `status` and `getState()`
+  keep `shareReplay({ bufferSize: 1, refCount: false })` so late subscribers get
+  the last value.
+- The reconnect `delay` callback deliberately does not log the error; state
+  transitions are the signal.
+- `Session.createGrid()` keeps an unbounded `shareReplay({ refCount: true })` so
+  late subscribers replay lap history.
+- `this.finish(id)` stays inside `Session`'s `scan()` until it can be moved and
+  tested on hardware in one go.
